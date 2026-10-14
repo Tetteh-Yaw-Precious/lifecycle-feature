@@ -2,6 +2,27 @@
 
 Load this when implementing, not when deciding. Shapes only; the project profile names the real files.
 
+## Read this first: the code below is Django and React
+
+That is where the recipe was first built, and the identifiers leak it. The **shapes** are portable.
+The names are not. Five things need translating and nothing else does:
+
+| What you see here | Go | Rails | Node |
+|---|---|---|---|
+| frozen `@dataclass` registry in a module dict | a `map[stageCommand]CommandRule` built once in `init()` and never mutated | a frozen `Hash` in an initializer | a `const` object with `as const`, or `Object.freeze` |
+| `post_save` signals | **no equivalent, and you do not want one.** Publish the domain event explicitly at the end of the procedure, which is what the recipe asks for anyway | `after_commit` | an emitter the procedure calls |
+| `update_fields=['status']` | GORM `Select("status", "updated_at")`. Also `Omit(clause.Associations)`, or a save will upsert children you did not touch | `update_columns`, plus `touch` | the ORM's partial-update field list |
+| `ImproperlyConfigured` on import | `panic` inside `init()`, so a bad table cannot boot | `raise` in an initializer | throw at module load |
+| `manage.py export_registry` | a `cmd/` binary or a `go:generate` target | a rake task | a package script |
+
+The one that is not a rename is the second. Django's signals let a transition happen *implicitly*,
+which is the disease this recipe treats, so a stack without signals starts one step ahead rather
+than one behind.
+
+The frontend pieces assume React with a query cache. The shapes (one generated registry, one stage
+selector, one command hook, one actions component, one row model) hold on any framework with a
+cache; `mutation key` and `invalidation set` are the two words to translate.
+
 ## Registry row
 
 ```python
@@ -21,6 +42,19 @@ COMMANDS: dict[tuple[Stage, str], CommandRule]
 
 Derived: `derive_stage(subject)`, `allowed_actions_for(subject, viewer)`, `resolve_party(subject, viewer)`, `read_model(subject, viewer)`, `export_registry()`.
 
+### The read model fields, defined
+
+- `stage`: from `derive_stage`.
+- `awaiting`: **which party must move next**, as a role relative to the subject (`PRO`, `OWNER`,
+  `RECEIVER` resolved to a concrete role), never a user id, and `null` in every terminal stage.
+  Derive it from the registry, never per screen: it is the actor of the person-callable commands
+  available in the current stage when they all share one actor, and `null` otherwise. If two parties
+  can both move and the product needs to say so, add `BOTH` as a third value rather than overloading
+  `null`, because a screen cannot tell "nobody" from "either of you" and will render the wrong
+  sentence.
+- `allowed_actions`: for **this viewer**, so the other party gets `[]` on somebody else's turn.
+- `counterparty`: the other party's display identity and role, so no screen joins for a name.
+
 ### Defaults decided once, reuse them
 
 - Stage is derived from stored fields; the storage column keeps its old values. No migration for a stage.
@@ -30,6 +64,10 @@ Derived: `derive_stage(subject)`, `allowed_actions_for(subject, viewer)`, `resol
 - Agreed subjects never expire on read. Expiry is INVITED and NEGOTIATING only.
 - Sibling settlement on completion sits behind a setting, default off, until the stakeholder decides.
 - Every status write names the auto-updating timestamp in `update_fields`.
+- Derive the stage **after** acquiring the lock, never before. That is what makes a concurrent
+  second move refuse rather than apply.
+- A move already applied returns **409, never 200**. A command is safe to retry without an
+  idempotency key: it applies once and refuses once, or refuses twice.
 
 ## Procedure pipeline
 
@@ -53,6 +91,7 @@ Person-callable commands mount as `POST /<subjects>/<key>/<command>`; PAYMENT an
 - [ ] `export_<subject>_registry` management command; generated TS file committed; snapshot JSON test.
 - [ ] Parametrised HTTP tests: per row (actor ok, other 403, stranger 404, wrong stage 409) and per absent pair (409).
 - [ ] Domain event has receivers for notification and activity; no post_save decides a transition.
+- [ ] One concurrency test: the same command twice in parallel, one success and one 409.
 - [ ] Mermaid export of the state diagram.
 
 ## Frontend pieces

@@ -69,21 +69,39 @@ every notification, every permission check. With the file and the line number. E
 working, wrong, or dead. The design then has to point at that table, because a problem that isn't
 in it was a guess.
 
-**The permissions ship first, on their own, before anything else changes.** The rollout is seven
+**The permissions ship first, on their own, before anything else changes.** The rollout is six
 pieces of work stacked in order, and the first is nothing but locking down who is allowed to touch
 the thing, with no change to what anyone sees. Fix the interesting part first and the hole stays
 open for the length of the project. There's a related rule worth stealing whatever you're building:
 any new scheduled job the work introduces ships **switched off**, with a one-off quiet catch-up run,
 so its first tick can't email a decade of old records.
 
+**And there's a floor for when six is not affordable.** A recipe that needs six pieces of work gets
+abandoned in exactly the week it would have helped, and abandoning it means somebody writes the
+rules by hand in six places instead. So the skill names the two that still help on their own: the
+permissions, and then the rules table plus what the screens read, added without anything reading
+from them yet. Stop there and say so in writing. That's honest debt with a named next step rather
+than a half-built pattern.
+
 ## What's in the box
 
 - **`SKILL.md`** is the recipe: the gate, the seven phases, the common mistakes and the red flags.
+- **`EXAMPLE-invitation.md`** is one complete table filled in, for an owner inviting a professional
+  to a job where either side can counter on price. Read it before writing your own, because three
+  things only make sense seen whole: the actor that **flips** between stages (in the first stage
+  only the professional may accept; once they counter, the offer is theirs, so only the owner may),
+  the combinations left out **on purpose** and what each refusal says, and the two moves that never
+  get an address of their own because nothing outside the system should be able to call them.
 - **`reference.md`** holds the shapes and the decisions already made once: what a row in the table
   needs, the fixed order of operations when a move is applied, and which error to return when.
   That exists so you aren't re-arguing the same small decisions on every project.
 
-Neither names a framework or a language. The recipe describes shapes, so it travels.
+**On languages, honestly.** The recipe itself is about shapes and travels anywhere. The code
+examples in `reference.md` are Python and React, because that's where this was first built, so
+`reference.md` opens with a table translating the five things that need it into Go, Rails and Node.
+Four are renames. One isn't: Python lets a status change happen as a side effect of saving, which is
+the disease this whole recipe treats, so a language without that feature starts a step ahead rather
+than a step behind.
 
 ## Signs to stop, from the skill itself
 

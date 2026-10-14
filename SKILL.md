@@ -33,9 +33,28 @@ Every phase produces the artifact named in bold. A phase without its artifact is
 
 Before design, enumerate what exists, with file and line: every stored status value; every place that writes the status (views, serializers, signals, tasks, webhooks); every screen or helper that derives "what stage are we in" or "which buttons show"; every notification and activity write for the domain; every permission check on the domain's endpoints. Mark each live-and-working, live-and-wrong, or dead. The design must cite this table; a defect not in it is a guess.
 
+Use this shape. A row you cannot give a verdict to is a row you have not actually read, which is the
+whole reason the phase exists:
+
+| # | Kind | Where (file:line) | What it does today | Verdict |
+|---|---|---|---|---|
+| 1 | stored value | `models.py:41` | `status` accepts 7 values, 2 of them unused | live-and-wrong |
+| 2 | status write | `views.py:118` | sets `status='accepted'` with no actor check | live-and-wrong |
+| 3 | stage derivation | `InviteCard.tsx:22` | reads `status` directly for the badge | live-and-working |
+| 4 | notification | `signals.py:9` | `post_save` fires on every save, not on transition | live-and-wrong |
+| 5 | permission | `permissions.py:30` | checks org membership, not party | live-and-wrong |
+
+`Kind` is one of: stored value, status write, stage derivation, allowed-actions derivation,
+notification, activity write, permission check. Count the rows and put the number in the issue: it
+is the only honest measure of how big this is, and it is almost always larger than the estimate
+given before the table existed.
+
 ### 2. Registry: **one table, one file**
 
-One file per lifecycle declaring, for each `(stage, command)`: the actor (a role relative to the subject, never a user id), the target stage, an optional guard predicate, named effects, the notification recipient rule, the activity kind, whether the UI must confirm, and whether the command does external I/O. Stage is **derived** from stored fields, not a new stored column, unless a real fact must be stored. Load `reference.md` for the field list and defaults that have already been decided once.
+One file per lifecycle declaring, for each `(stage, command)`: the actor (a role relative to the subject, never a user id), the target stage, an optional guard predicate, named effects, the notification recipient rule, the activity kind, whether the UI must confirm, and whether the command does external I/O. Stage is **derived** from stored fields, not a new stored column, unless a real fact must be stored. Load `reference.md` for the field list and defaults that have already been decided once, and
+`EXAMPLE-invitation.md` for one complete table filled in. Read the example before writing your own:
+the actor that flips between stages, the pairs left absent on purpose, and the rows that never get
+an endpoint only make sense seen whole.
 
 Decide and write down: which party is "the actor" for turn-based moves (receiver of the standing offer, not "either party"); what happens on the terminal moves to any open sub-object (a negotiation, a hold); whether siblings settle on completion.
 
@@ -43,7 +62,24 @@ Decide and write down: which party is "the actor" for turn-based moves (receiver
 
 One `apply_command(subject, command, actor)` per project, parameterised by the registry, not one per lifecycle. Fixed pipeline: lock the row; resolve the party; derive the stage; find the row or refuse with 409; check the actor or refuse with 403; check the guard or refuse with 409; validate the payload; run effects; write the state naming every updated field; emit one domain event. Mount HTTP endpoints from the registry through a factory that refuses at boot to mount a command the table does not declare. External I/O (payments) runs untransacted before the command; the command then runs in its own short transaction.
 
+**Two people, two tabs, one move.** The row lock serialises the writes. It does not make the second
+one correct. What makes it correct is deriving the stage *after* acquiring the lock: the second
+request re-derives, finds no row for the stage it now sees, and refuses with 409. Never read the
+stage before the lock, and never make a command idempotent by returning 200 for a move already
+applied. A 200 tells the frontend it did the thing, and the frontend cannot tell that apart from
+its own success.
+
+So a retried command either applies once and refuses once, or refuses twice. Both are correct and
+neither needs an idempotency key.
+
 If a second lifecycle arrives and the first builder is lifecycle-specific, generalise the builder first. Two builders is the mistake the recipe exists to prevent.
+
+This is the one place `vertical-slice-matrix` would otherwise tell you to refuse, so be explicit
+about why it does not apply. That skill's rule is to build a shared engine when its **second**
+consumer arrives, which is precisely this moment. Its refusal (ship the feature, leave the count
+where it is) is about duplicated *behaviour*, a formatter or a component, not about an engine whose
+second consumer has just turned up. Generalise it as part of building the second lifecycle, never as
+a separate refactor PR, and say in the PR that the builder went from one lifecycle to two.
 
 ### 4. Folds: **read model, generated frontend registry, tests, docs, activity**
 
@@ -58,6 +94,10 @@ If a second lifecycle arrives and the first builder is lifecycle-specific, gener
 - `selectStage(subject, viewer)`: server read model first, a legacy derivation as fallback only while old API responses can still arrive.
 - Copy tables keyed by stage and viewer role, and by command: label, variant, toast, confirm dialog. Copy never lives in a component.
 - One command hook: one mutation key per subject, optimistic target from the registry row, one invalidation set that includes lists and activity.
+- **On a refusal, roll back to the server, not to the previous client state.** A 409 almost always
+  means the other party moved first, so the state you optimistically replaced is already stale.
+  Refetch, then show the refusal copy for the stage you actually landed in rather than the one you
+  thought you were leaving.
 - One actions component that renders exactly `allowed_actions`, and one row model for lists that both parties' pages use. Delete the normalisers and status cards it replaces in the same PR.
 
 ### 6. Guardrails: **two ratcheting checks**
@@ -75,6 +115,23 @@ Add, with the project's guardrail harness: a backend check that no code outside 
 
 Each PR is stacked on the previous branch and retargeted to the base when its parent merges. Every scheduled task the rollout adds ships **off by default** behind a setting, with a one-off quiet backfill command, so a first tick cannot mass-notify a backlog.
 
+**When you cannot afford six: the two that still help.** A recipe that needs six PRs gets abandoned
+in the week it would have helped most, and abandoning it means somebody hand-writes the rules in six
+places instead. So there is a floor, and it is PR 1 and PR 2 in that order and nothing else:
+
+- **PR 1 on its own closes the hole.** Party-only permissions, status read-only except the
+  transitions the current frontend already sends, transition-only signals. No registry, no
+  procedure, no frontend change. If you ship exactly one thing, ship this one. It is also the only
+  PR here that is urgent rather than merely correct.
+- **PR 2 makes the next person's job smaller.** The registry table and the read model, both
+  additive, nothing reading from them yet. The table becomes the one place the rules are written
+  down, so the hand-written copies at least have something to be checked against, and the audit
+  table from phase 1 has somewhere to land.
+
+Then stop, and say so in the issue: the registry exists and nothing derives from it yet. That is
+honest debt with a named next step. What you must not do is skip PR 1 to get to the interesting
+part, which is the mistake the common-mistakes table already names.
+
 ## Common mistakes
 
 | Mistake | What to do instead |
@@ -90,4 +147,4 @@ Each PR is stacked on the previous branch and retargeted to the base when its pa
 
 ## Red flags
 
-Any of these means stop and return to the recipe: a second `apply_command`; a status literal in a component; a button whose visibility is computed from `status` in a page; a new `if status == ...` in a signal; a migration for a state that could be derived; a PR that changes both permissions and behaviour.
+Any of these means stop and return to the recipe: a second `apply_command`; a status literal in a component; a button whose visibility is computed from `status` in a page; a new `if status == ...` in a signal; a command that returns 200 for a move already applied; a migration for a state that could be derived; a PR that changes both permissions and behaviour.
